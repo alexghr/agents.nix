@@ -1,9 +1,10 @@
 {
-  buildNpmPackage,
+  fetchurl,
   lib,
-  stdenv,
+  stdenvNoCC,
 }: let
   packageJson = builtins.fromJSON (builtins.readFile ./package.json);
+  packageLock = builtins.fromJSON (builtins.readFile ./package-lock.json);
   version = packageJson.dependencies."@openai/codex";
   platformBySystem = {
     aarch64-darwin = {
@@ -16,23 +17,29 @@
     };
   };
   platform =
-    platformBySystem.${stdenv.hostPlatform.system}
-    or (throw "codex does not support ${stdenv.hostPlatform.system}");
+    platformBySystem.${stdenvNoCC.hostPlatform.system}
+    or (throw "codex does not support ${stdenvNoCC.hostPlatform.system}");
+  platformPackage = packageLock.packages."node_modules/@openai/${platform.package}";
 in
-  buildNpmPackage {
+  stdenvNoCC.mkDerivation {
     pname = "codex";
     inherit version;
 
-    src = lib.sources.sourceByRegex ./. [".+\.json"];
-    npmDepsHash = lib.removeSuffix "\n" (builtins.readFile ./npm-deps-hash.txt);
-    dontNpmBuild = true;
+    src = fetchurl {
+      url = platformPackage.resolved;
+      hash = platformPackage.integrity;
+    };
+    dontConfigure = true;
+    dontBuild = true;
+    # Preserve upstream binaries and their signatures.
+    dontStrip = true;
 
     installPhase = ''
       runHook preInstall
 
       mkdir -p "$out/bin" "$out/lib/codex"
       cp -R \
-        "node_modules/@openai/${platform.package}/vendor/${platform.target}/." \
+        "vendor/${platform.target}/." \
         "$out/lib/codex/"
       ln -s "$out/lib/codex/bin/codex" "$out/bin/codex"
 
