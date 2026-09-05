@@ -1,0 +1,107 @@
+name: Update agents
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "54 6 * * 1" # Mondays at 6:54AM
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-codex
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "lts/*"
+          package-manager-cache: false
+
+      - name: Check npm for a newer Codex
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current=$(node --eval \
+            "process.stdout.write(require('./codex/package.json').dependencies['@openai/codex'])")
+          latest=$(npm view --silent '@openai/codex' version)
+
+          if [ -z "$latest" ]; then
+            echo "npm returned an empty Codex version" >&2
+            exit 1
+          fi
+
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "latest=$latest" >> "$GITHUB_OUTPUT"
+
+          if [ "$current" = "$latest" ]; then
+            echo "update=false" >> "$GITHUB_OUTPUT"
+            echo "Codex is already current at $current." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "update=true" >> "$GITHUB_OUTPUT"
+            echo "Updating Codex from $current to $latest." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Update npm package and lockfile
+        if: steps.versions.outputs.update == 'true'
+        env:
+          LATEST_CODEX_VERSION: ${{ steps.versions.outputs.latest }}
+        run: |
+          npm install \
+            --prefix codex \
+            --package-lock-only \
+            --save-exact \
+            --ignore-scripts \
+            --no-audit \
+            --no-fund \
+            "@openai/codex@$LATEST_CODEX_VERSION"
+
+      - name: Install Nix
+        if: steps.versions.outputs.update == 'true'
+        uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31.11.1
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update npm dependency hash
+        if: steps.versions.outputs.update == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          npm_deps_hash=$(nix run --inputs-from . nixpkgs#prefetch-npm-deps -- \
+            codex/package-lock.json)
+          printf '%s\n' "$npm_deps_hash" > codex/npm-deps-hash.txt
+
+      - name: Build Codex
+        if: steps.versions.outputs.update == 'true'
+        run: nix build .#codex --no-link --print-build-logs
+
+      - name: Commit and push update
+        if: steps.versions.outputs.update == 'true'
+        env:
+          LATEST_CODEX_VERSION: ${{ steps.versions.outputs.latest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            codex/package.json \
+            codex/package-lock.json \
+            codex/npm-deps-hash.txt
+          git diff --cached --check
+          git commit -m "chore: update Codex to $LATEST_CODEX_VERSION"
+          git push origin HEAD:main

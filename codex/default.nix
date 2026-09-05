@@ -24,7 +24,7 @@ in
     inherit version;
 
     src = lib.sources.sourceByRegex ./. [".+\.json"];
-    npmDepsHash = "sha256-Xmo64GYoB57ueXf4Dyf1IQ9RxuSAQVz/DQzse18ffSw=";
+    npmDepsHash = lib.removeSuffix "\n" (builtins.readFile ./npm-deps-hash.txt);
     dontNpmBuild = true;
 
     installPhase = ''
