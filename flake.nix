@@ -15,9 +15,10 @@
     packages = forAllSystems (
       system: let
         pkgs = import nixpkgs {inherit system;};
+        claude = pkgs.callPackage ./claude {};
         codex = pkgs.callPackage ./codex {};
       in {
-        inherit codex;
+        inherit claude codex;
         default = codex;
       }
     );

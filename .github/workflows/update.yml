@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: update-codex
+  group: update-agents
   cancel-in-progress: false
 
 jobs:
@@ -28,45 +28,43 @@ jobs:
           node-version: "lts/*"
           package-manager-cache: false
 
-      - name: Check npm for a newer Codex
+      - name: Check npm and update agent lockfiles
         id: versions
         shell: bash
         run: |
           set -euo pipefail
 
-          current=$(node --eval \
-            "process.stdout.write(require('./codex/package.json').dependencies['@openai/codex'])")
-          latest=$(npm view --silent '@openai/codex' version)
+          update=false
+          for agent in codex claude; do
+            case "$agent" in
+              codex) package='@openai/codex' ;;
+              claude) package='@anthropic-ai/claude-code' ;;
+            esac
+            current=$(node --eval \
+              "process.stdout.write(require('./$agent/package.json').dependencies['$package'])")
+            latest=$(npm view --silent "$package" version)
 
-          if [ -z "$latest" ]; then
-            echo "npm returned an empty Codex version" >&2
-            exit 1
-          fi
+            if [ -z "$latest" ]; then
+              echo "npm returned an empty $agent version" >&2
+              exit 1
+            fi
 
-          echo "current=$current" >> "$GITHUB_OUTPUT"
-          echo "latest=$latest" >> "$GITHUB_OUTPUT"
-
-          if [ "$current" = "$latest" ]; then
-            echo "update=false" >> "$GITHUB_OUTPUT"
-            echo "Codex is already current at $current." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "update=true" >> "$GITHUB_OUTPUT"
-            echo "Updating Codex from $current to $latest." >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Update npm package and lockfile
-        if: steps.versions.outputs.update == 'true'
-        env:
-          LATEST_CODEX_VERSION: ${{ steps.versions.outputs.latest }}
-        run: |
-          npm install \
-            --prefix codex \
-            --package-lock-only \
-            --save-exact \
-            --ignore-scripts \
-            --no-audit \
-            --no-fund \
-            "@openai/codex@$LATEST_CODEX_VERSION"
+            if [ "$current" = "$latest" ]; then
+              echo "$agent is already current at $current." >> "$GITHUB_STEP_SUMMARY"
+            else
+              update=true
+              echo "Updating $agent from $current to $latest." >> "$GITHUB_STEP_SUMMARY"
+              npm install \
+                --prefix "$agent" \
+                --package-lock-only \
+                --save-exact \
+                --ignore-scripts \
+                --no-audit \
+                --no-fund \
+                "$package@$latest"
+            fi
+          done
+          echo "update=$update" >> "$GITHUB_OUTPUT"
 
       - name: Install Nix
         if: steps.versions.outputs.update == 'true'
@@ -74,19 +72,22 @@ jobs:
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and smoke-test Codex on Linux
+      - name: Build and smoke-test agents on Linux
         if: steps.versions.outputs.update == 'true'
+        env:
+          NIXPKGS_ALLOW_UNFREE: "1" # Explicitly allow Claude Code in CI.
         shell: bash
         run: |
           set -euo pipefail
 
-          codex_out=$(nix build .#codex --no-link --print-out-paths --print-build-logs)
-          "$codex_out/bin/codex" --version
+          nix flake check --impure --all-systems --no-build
+          for agent in codex claude; do
+            agent_out=$(nix build ".#$agent" --impure --no-link --print-out-paths --print-build-logs)
+            "$agent_out/bin/$agent" --version
+          done
 
       - name: Commit and push update
         if: steps.versions.outputs.update == 'true'
-        env:
-          LATEST_CODEX_VERSION: ${{ steps.versions.outputs.latest }}
         shell: bash
         run: |
           set -euo pipefail
@@ -95,7 +96,9 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add \
             codex/package.json \
-            codex/package-lock.json
+            codex/package-lock.json \
+            claude/package.json \
+            claude/package-lock.json
           git diff --cached --check
-          git commit -m "chore: update Codex to $LATEST_CODEX_VERSION"
+          git commit -m "chore: update coding agents"
           git push origin HEAD:main
