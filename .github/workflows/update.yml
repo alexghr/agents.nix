@@ -35,10 +35,12 @@ jobs:
           set -euo pipefail
 
           update=false
-          for agent in codex claude; do
+          pi_update=false
+          for agent in codex claude pi; do
             case "$agent" in
               codex) package='@openai/codex' ;;
               claude) package='@anthropic-ai/claude-code' ;;
+              pi) package='@earendil-works/pi-coding-agent' ;;
             esac
             current=$(node --eval \
               "process.stdout.write(require('./$agent/package.json').dependencies['$package'])")
@@ -62,15 +64,40 @@ jobs:
                 --no-audit \
                 --no-fund \
                 "$package@$latest"
+              if [ "$agent" = pi ]; then
+                pi_update=true
+                npm install \
+                  --prefix pi \
+                  --package-lock-only \
+                  --save-exact \
+                  --ignore-scripts \
+                  --no-audit \
+                  --no-fund \
+                  "@earendil-works/chord@$latest" \
+                  "@earendil-works/pi-agent-core@$latest" \
+                  "@earendil-works/pi-ai@$latest" \
+                  "@earendil-works/pi-telemetry@$latest" \
+                  "@earendil-works/pi-tui@$latest"
+              fi
             fi
           done
           echo "update=$update" >> "$GITHUB_OUTPUT"
+          echo "pi_update=$pi_update" >> "$GITHUB_OUTPUT"
 
       - name: Install Nix
         if: steps.versions.outputs.update == 'true'
         uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31.11.1
         with:
           github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Pi npm dependency hash
+        if: steps.versions.outputs.pi_update == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          npm_deps_hash=$(NPM_FETCHER_VERSION=2 nix run nixpkgs#prefetch-npm-deps -- pi/package-lock.json)
+          printf '%s\n' "$npm_deps_hash" > pi/npm-deps-hash
 
       - name: Build and smoke-test agents on Linux
         if: steps.versions.outputs.update == 'true'
@@ -81,7 +108,7 @@ jobs:
           set -euo pipefail
 
           nix flake check --impure --all-systems --no-build
-          for agent in codex claude; do
+          for agent in codex claude pi; do
             agent_out=$(nix build ".#$agent" --impure --no-link --print-out-paths --print-build-logs)
             "$agent_out/bin/$agent" --version
           done
@@ -98,7 +125,10 @@ jobs:
             codex/package.json \
             codex/package-lock.json \
             claude/package.json \
-            claude/package-lock.json
+            claude/package-lock.json \
+            pi/package.json \
+            pi/package-lock.json \
+            pi/npm-deps-hash
           git diff --cached --check
           git commit -m "chore: update coding agents"
           git push origin HEAD:main

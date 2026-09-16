@@ -17,8 +17,9 @@
         pkgs = import nixpkgs {inherit system;};
         claude = pkgs.callPackage ./claude {};
         codex = pkgs.callPackage ./codex {};
+        pi = pkgs.callPackage ./pi {};
       in {
-        inherit claude codex;
+        inherit claude codex pi;
         default = codex;
       }
     );

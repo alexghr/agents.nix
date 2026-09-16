@@ -2,11 +2,12 @@
 
 This is a simple flake to get the latest version of coding agents. The flake automatically updates weekly.
 
-Run Codex or Claude Code (marked unfree due to its license) directly:
+Run Codex, Claude Code (marked unfree due to its license), or Pi directly:
 
 ```sh
 nix run github:alexghr/agents.nix#codex
 NIXPKGS_ALLOW_UNFREE=1 nix run --impure github:alexghr/agents.nix#claude
+nix run github:alexghr/agents.nix#pi
 ```
 
 ## devenv
@@ -31,6 +32,7 @@ in {
     pkgs.git
     agents.codex
     agents.claude
+    agents.pi
   ];
 }
 ```
