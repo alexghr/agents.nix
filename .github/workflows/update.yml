@@ -96,6 +96,7 @@ jobs:
         run: |
           set -euo pipefail
 
+          node .github/scripts/fill-npm-integrity.mjs pi/package-lock.json
           npm_deps_hash=$(NPM_FETCHER_VERSION=2 nix run nixpkgs#prefetch-npm-deps -- pi/package-lock.json)
           printf '%s\n' "$npm_deps_hash" > pi/npm-deps-hash
 
