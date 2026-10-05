@@ -11,6 +11,10 @@
       package = "codex-darwin-arm64";
       target = "aarch64-apple-darwin";
     };
+    aarch64-linux = {
+      package = "codex-linux-arm64";
+      target = "aarch64-unknown-linux-musl";
+    };
     x86_64-linux = {
       package = "codex-linux-x64";
       target = "x86_64-unknown-linux-musl";
