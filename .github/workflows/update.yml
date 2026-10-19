@@ -2,8 +2,6 @@ name: Update agents
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "54 6 * * 1" # Mondays at 6:54AM
 
 permissions:
   contents: write
