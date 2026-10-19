@@ -1,6 +1,6 @@
 # agents.nix
 
-This is a simple flake to get the latest version of coding agents. The flake automatically updates weekly.
+This is a simple flake to get the latest version of coding agents. The flake automatically updates daily.
 
 Run Codex, Claude Code (marked unfree due to its license), or Pi directly:
 

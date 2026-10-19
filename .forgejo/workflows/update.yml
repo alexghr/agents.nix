@@ -1,0 +1,130 @@
+name: Update agents
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "54 6 * * *" # Daily at 06:54 UTC
+
+concurrency:
+  group: update-agents
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: nix
+    steps:
+      - name: Check out main
+        uses: https://github.com/actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: main
+          github-server-url: ${{ forgejo.server_url }}
+          token: ${{ forgejo.token }}
+
+      - name: Set up Node.js from the locked nixpkgs
+        shell: bash
+        run: |
+          set -euo pipefail
+          nix build --inputs-from . nixpkgs#nodejs \
+            --out-link "$RUNNER_TEMP/agents-nodejs"
+          echo "$RUNNER_TEMP/agents-nodejs/bin" >> "$GITHUB_PATH"
+
+      - name: Check npm and update agent lockfiles
+        id: versions
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          update=false
+          pi_update=false
+          for agent in codex claude pi; do
+            case "$agent" in
+              codex) package='@openai/codex' ;;
+              claude) package='@anthropic-ai/claude-code' ;;
+              pi) package='@earendil-works/pi-coding-agent' ;;
+            esac
+            current=$(node --eval \
+              "process.stdout.write(require('./$agent/package.json').dependencies['$package'])")
+            latest=$(npm view --silent "$package" version)
+
+            if [ -z "$latest" ]; then
+              echo "npm returned an empty $agent version" >&2
+              exit 1
+            fi
+
+            if [ "$current" = "$latest" ]; then
+              echo "$agent is already current at $current."
+            else
+              update=true
+              echo "Updating $agent from $current to $latest."
+              npm install \
+                --prefix "$agent" \
+                --package-lock-only \
+                --save-exact \
+                --ignore-scripts \
+                --no-audit \
+                --no-fund \
+                "$package@$latest"
+              if [ "$agent" = pi ]; then
+                pi_update=true
+                npm install \
+                  --prefix pi \
+                  --package-lock-only \
+                  --save-exact \
+                  --ignore-scripts \
+                  --no-audit \
+                  --no-fund \
+                  "@earendil-works/chord@$latest" \
+                  "@earendil-works/pi-agent-core@$latest" \
+                  "@earendil-works/pi-ai@$latest" \
+                  "@earendil-works/pi-telemetry@$latest" \
+                  "@earendil-works/pi-tui@$latest"
+              fi
+            fi
+          done
+          echo "update=$update" >> "$GITHUB_OUTPUT"
+          echo "pi_update=$pi_update" >> "$GITHUB_OUTPUT"
+
+      - name: Update Pi npm dependency hash
+        if: steps.versions.outputs.pi_update == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node .github/scripts/fill-npm-integrity.mjs pi/package-lock.json
+          npm_deps_hash=$(NPM_FETCHER_VERSION=2 nix run --inputs-from . nixpkgs#prefetch-npm-deps -- pi/package-lock.json)
+          printf '%s\n' "$npm_deps_hash" > pi/npm-deps-hash
+
+      - name: Build and smoke-test agents on Linux
+        if: steps.versions.outputs.update == 'true'
+        env:
+          NIXPKGS_ALLOW_UNFREE: "1" # Explicitly allow Claude Code in CI.
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          nix flake check --impure --all-systems --no-build
+          for agent in codex claude pi; do
+            agent_out=$(nix build ".#$agent" --impure --no-link --print-out-paths --print-build-logs)
+            "$agent_out/bin/$agent" --version
+          done
+
+      - name: Commit and push update
+        if: steps.versions.outputs.update == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git config user.name "forgejo-actions[bot]"
+          git config user.email "forgejo-actions@forge.alexghr.me"
+          git add \
+            codex/package.json \
+            codex/package-lock.json \
+            claude/package.json \
+            claude/package-lock.json \
+            pi/package.json \
+            pi/package-lock.json \
+            pi/npm-deps-hash
+          git diff --cached --check
+          git commit -m "chore: update coding agents"
+          git push origin HEAD:main
